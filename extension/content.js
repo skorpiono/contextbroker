@@ -1,124 +1,169 @@
+// ---------- Config ----------
 const CONFIG = {
-    selectors: {
-        textarea: ['textarea[data-id="root"]', '#prompt-textarea'],
-        sendButton: ['button[data-id="send"]', 'button[type="submit"]']
-    },
-    serverUrl: localStorage.getItem('CB_SERVER_URL') || 'https://contextbroker-production.up.railway.app',
-    clientToken: localStorage.getItem('CB_CLIENT_TOKEN')
+  API_BASE: "https://YOUR_RAILWAY_URL", // e.g. https://web-production-abc.up.railway.app
+  AUGMENT_ENDPOINT: "/augment",
+  selectors: {
+    textarea: [
+      '#prompt-textarea',
+      'textarea[placeholder*="message"]',
+      'textarea[placeholder*="Nachricht"]',
+      'textarea'
+    ],
+    sendButton: [
+      'button[data-testid="send-button"]',
+      'button[aria-label*="Send"]',
+      'button[aria-label*="Senden"]',
+      'form button[type="submit"]'
+    ]
+  }
 };
 
-class ContextOverlay {
-    constructor() {
-        this.init();
-    }
-
-    async init() {
-        this.injectStyles();
-        this.createOverlay();
-        this.setupEventListeners();
-        
-        new MutationObserver(() => this.attachToTextarea())
-            .observe(document.body, { childList: true, subtree: true });
-    }
-
-    createOverlay() {
-        const overlay = document.createElement('div');
-        overlay.className = 'context-overlay';
-        overlay.innerHTML = `
-            <input type="text" placeholder="Type your message...">
-            <button>Send</button>
-        `;
-        document.body.appendChild(overlay);
-    }
-
-    injectStyles() {
-        const style = document.createElement('link');
-        style.rel = 'stylesheet';
-        style.href = chrome.runtime.getURL('overlay.css');
-        document.head.appendChild(style);
-    }
-
-    setupEventListeners() {
-        const input = document.querySelector('.context-overlay input');
-        const button = document.querySelector('.context-overlay button');
-
-        button.addEventListener('click', () => this.handleSubmit(input.value));
-        input.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.handleSubmit(input.value);
-            }
-        });
-    }
-
-    async handleSubmit(text) {
-        if (!text.trim()) return;
-
-        try {
-            const response = await fetch(`${CONFIG.serverUrl}/v1/context/summarize`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Client-Token': CONFIG.clientToken
-                },
-                body: JSON.stringify({ prompt: text })
-            });
-
-            if (!response.ok) {
-                throw new Error('Server response not ok');
-            }
-
-            const data = await response.json();
-            this.injectPrompt(data.finalPrompt);
-            
-            // Clear input after successful submission
-            document.querySelector('.context-overlay input').value = '';
-
-        } catch (error) {
-            console.error('Failed to process prompt:', error);
-            alert('Failed to process your message. Please try again.');
-        }
-    }
-
-    injectPrompt(prompt) {
-        const textarea = this.findTextarea();
-        if (!textarea) {
-            console.error('ChatGPT textarea not found');
-            return;
-        }
-
-        textarea.value = prompt;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        const button = this.findSendButton();
-        if (button) {
-            button.click();
-        }
-    }
-
-    findTextarea() {
-        for (const selector of CONFIG.selectors.textarea) {
-            const element = document.querySelector(selector);
-            if (element) return element;
-        }
-        return null;
-    }
-
-    findSendButton() {
-        for (const selector of CONFIG.selectors.sendButton) {
-            const element = document.querySelector(selector);
-            if (element) return element;
-        }
-        return null;
-    }
-
-    attachToTextarea() {
-        const textarea = this.findTextarea();
-        if (textarea && !textarea.dataset.contextBrokerAttached) {
-            textarea.dataset.contextBrokerAttached = 'true';
-            // Additional textarea-specific setup if needed
-        }
-    }
+// ---------- DOM helpers ----------
+function $(sel) { return document.querySelector(sel); }
+function findFirst(selectors) {
+  for (const s of selectors) {
+    const el = document.querySelector(s);
+    if (el) return el;
+  }
+  return null;
 }
 
-// Initialize the overlay
-new ContextOverlay();
+// ---------- Overlay ----------
+function buildOverlay() {
+  if (document.getElementById("cb-overlay")) return;
+
+  const root = document.createElement("div");
+  root.id = "cb-overlay";
+
+  root.innerHTML = `
+    <div id="cb-header">
+      <div>
+        <span id="cb-title">ContextBroker</span>
+        <span id="cb-status"></span>
+      </div>
+      <div id="cb-actions">
+        <button id="cb-toggle" class="cb-btn secondary">Hide</button>
+        <button id="cb-augment" class="cb-btn">Augment</button>
+      </div>
+    </div>
+    <div id="cb-context">
+      <div style="font-weight:600; margin-bottom:4px;">Context preview</div>
+      <ul id="cb-list"></ul>
+    </div>
+  `;
+
+  document.body.appendChild(root);
+
+  // Toggle preview
+  const toggle = $("#cb-toggle");
+  const ctx = $("#cb-context");
+  toggle.addEventListener("click", () => {
+    const isHidden = ctx.style.display !== "block";
+    ctx.style.display = isHidden ? "block" : "none";
+    toggle.textContent = isHidden ? "Hide" : "Show";
+  });
+
+  // Augment click
+  $("#cb-augment").addEventListener("click", onAugmentClick);
+
+  // Make sure we attach to the current textarea
+  attachToTextarea();
+}
+
+function setStatus(msg) {
+  const el = $("#cb-status");
+  if (el) el.textContent = msg ? `· ${msg}` : "";
+}
+
+// ---------- Core ----------
+async function getJWT() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage?.local.get(["ctx_jwt"], (res) => resolve(res?.ctx_jwt || null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function augment(prompt) {
+  const jwt = await getJWT();
+  const res = await fetch(`${CONFIG.API_BASE}${CONFIG.AUGMENT_ENDPOINT}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(jwt ? { "Authorization": `Bearer ${jwt}` } : {})
+    },
+    body: JSON.stringify({ prompt })
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`augment failed: ${res.status} ${txt}`);
+  }
+  return res.json(); // { augmentedPrompt, contextPreview, tokenUsageEstimate }
+}
+
+function getTextarea() {
+  return findFirst(CONFIG.selectors.textarea);
+}
+function getSendButton() {
+  return findFirst(CONFIG.selectors.sendButton);
+}
+
+async function onAugmentClick() {
+  const ta = getTextarea();
+  if (!ta) return setStatus("textarea not found");
+  const raw = (ta.value || "").trim();
+  if (!raw) return setStatus("empty prompt");
+
+  try {
+    setStatus("fetching context…");
+    const { augmentedPrompt, contextPreview = [] } = await augment(raw);
+
+    // Show context bullets
+    const list = $("#cb-list");
+    list.innerHTML = "";
+    for (const item of contextPreview) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      list.appendChild(li);
+    }
+    $("#cb-context").style.display = "block";
+    $("#cb-toggle").textContent = "Hide";
+
+    // Replace textarea text
+    ta.value = augmentedPrompt;
+
+    // Try to click send if there is a send button
+    setStatus("ready");
+    const btn = getSendButton();
+    if (btn) btn.click();
+    else ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  } catch (err) {
+    console.error("[ContextBroker] augment error", err);
+    setStatus("error");
+  }
+}
+
+function attachToTextarea() {
+  // If ChatGPT re-renders the input, nothing breaks
+  const ta = getTextarea();
+  if (!ta) return;
+}
+
+// ---------- Boot ----------
+function init() {
+  console.log("[ContextBroker] content script loaded");
+  buildOverlay();
+
+  // Watch for SPA route changes and reattach
+  const obs = new MutationObserver(() => attachToTextarea());
+  obs.observe(document.body, { childList: true, subtree: true });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
