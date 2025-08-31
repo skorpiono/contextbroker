@@ -1,0 +1,12 @@
+{
+    "manifest_version": 3,
+    "name": "ContextBroker",
+    "version": "1.0",
+    "permissions": ["storage"],
+    "host_permissions": ["https://chat.openai.com/*"],
+    "content_scripts": [{
+        "matches": ["https://chat.openai.com/*"],
+        "js": ["content.js"],
+        "css": ["overlay.css"]
+    }]
+}
