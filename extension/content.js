@@ -3,7 +3,7 @@ const CONFIG = {
         textarea: ['textarea[data-id="root"]', '#prompt-textarea'],
         sendButton: ['button[data-id="send"]', 'button[type="submit"]']
     },
-    serverUrl: localStorage.getItem('CB_SERVER_URL') || 'https://your-app-name.railway.app',
+    serverUrl: localStorage.getItem('CB_SERVER_URL') || 'https://your-app-name.railway.apppostgresql://postgres:AAeBvACtUBSuKSBigdJjuOsQdqxnhOZw@shinkansen.proxy.rlwy.net:51056/railway',
     clientToken: localStorage.getItem('CB_CLIENT_TOKEN')
 };
 
