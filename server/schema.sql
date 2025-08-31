@@ -1,8 +1,6 @@
--- Enable UUID extension
+-- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- Create pgvector extension
-CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "pgvector";
 
 -- Create users table
 CREATE TABLE users (
@@ -19,13 +17,14 @@ CREATE TABLE api_tokens (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create claims table without vector initially
+-- Create claims table with vector
 CREATE TABLE claims (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id),
     text TEXT NOT NULL,
     tags TEXT[] DEFAULT '{}',
     sensitivity TEXT DEFAULT 'public',
+    embedding vector(1536),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -36,6 +35,3 @@ CREATE TABLE profiles (
     system_overrides TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
--- Add vector column after extension is created
-ALTER TABLE claims ADD COLUMN IF NOT EXISTS embedding vector(1536);
