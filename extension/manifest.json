@@ -1,18 +1,32 @@
 {
-  "name": "ContextBroker",
-  "description": "Prompt bar that augments your query and injects it into ChatGPT.",
-  "version": "0.1.0",
   "manifest_version": 3,
+  "name": "ContextBroker",
+  "version": "0.1.0",
+  "description": "Augment ChatGPT prompts with private context from your backend.",
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+
+  "permissions": ["storage", "scripting", "activeTab"],
+
   "host_permissions": [
-    "https://chat.openai.com/*",
     "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
     "https://web-production-851cd.up.railway.app/*"
   ],
+
   "content_scripts": [
     {
-      "matches": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+
+  "action": {
+    "default_title": "ContextBroker"
+  }
 }
