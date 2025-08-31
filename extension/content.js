@@ -11,16 +11,17 @@ function insertBar() {
   wrap.innerHTML = `
     <style>
       #cb-bar{position:fixed;z-index:99999;left:50%;transform:translateX(-50%);
-        top:72px;max-width:920px;width:calc(100% - 48px);
+        top:72px;max-width:1100px;width:calc(100% - 48px);
         background:#0f1115;border:1px solid #2b2f36;border-radius:10px;
-        padding:8px 10px;display:flex;gap:8px;align-items:center;
+        padding:8px 10px;display:flex;gap:8px;align-items:flex-start;
         box-shadow:0 4px 16px rgba(0,0,0,.35);font-family:system-ui,Segoe UI,Arial}
       #cb-input{flex:1;resize:vertical;min-height:36px;max-height:160px;
         color:#e5e7eb;background:#151922;border:1px solid #2b2f36;border-radius:8px;padding:8px}
       #cb-run{padding:8px 12px;border:1px solid #2b2f36;background:#1e2633;
-        color:#e5e7eb;border-radius:8px;cursor:pointer}
-      #cb-status{font-size:12px;color:#93a1b1;margin-left:6px}
-      #cb-preview{white-space:pre-wrap;font-size:12px;color:#9aa4af;margin-top:4px;max-height:120px;overflow:auto}
+        color:#e5e7eb;border-radius:8px;cursor:pointer;white-space:nowrap}
+      #cb-status{font-size:12px;color:#93a1b1;margin-left:6px;white-space:nowrap}
+      #cb-preview{white-space:pre-wrap;font-size:12px;color:#9aa4af;margin-top:2px;
+        max-height:140px;overflow:auto;flex:1}
     </style>
     <textarea id="cb-input" placeholder="Type your prompt here."></textarea>
     <button id="cb-run">Augment</button>
@@ -47,23 +48,68 @@ function setPreview(txt) {
   el.textContent = "Context preview:\n" + cut;
 }
 
-// ======= robust selectors for ChatGPT input/send =======
+/* ======= deep query utilities (DOM + shadow DOM) ======= */
+
+function* allRoots(start = document) {
+  const stack = [start];
+  while (stack.length) {
+    const node = stack.pop();
+    yield node;
+    // Shadow root
+    if (node.shadowRoot) stack.push(node.shadowRoot);
+    // Regular children
+    const kids = node.querySelectorAll ? node.querySelectorAll("*") : [];
+    for (let i = kids.length - 1; i >= 0; i--) {
+      const k = kids[i];
+      stack.push(k);
+      if (k.shadowRoot) stack.push(k.shadowRoot);
+    }
+  }
+}
+
+function deepQuerySelector(selector) {
+  for (const root of allRoots(document)) {
+    try {
+      const found = root.querySelector ? root.querySelector(selector) : null;
+      if (found) return found;
+    } catch {}
+  }
+  return null;
+}
+
+function deepQuerySelectorAll(selector) {
+  const out = [];
+  for (const root of allRoots(document)) {
+    try {
+      const list = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+      for (const el of list) out.push(el);
+    } catch {}
+  }
+  return out;
+}
+
+/* ======= robust composer detection & send ======= */
 
 function findComposer() {
   // 1) official textarea
-  const direct = document.querySelector('[data-testid="prompt-textarea"]');
-  if (direct) return direct;
+  let el = deepQuerySelector('[data-testid="prompt-textarea"]');
+  if (el) return el;
 
-  // 2) textarea inside the composer form
-  const formText = document.querySelector('form textarea');
-  if (formText) return formText;
+  // 2) textarea inside any form with a submit button
+  const forms = deepQuerySelectorAll("form");
+  for (const f of forms) {
+    const hasSubmit = f.querySelector('button[type="submit"], [data-testid="send-button"]');
+    if (!hasSubmit) continue;
+    const te = f.querySelector("textarea");
+    if (te) return te;
+    const ce = f.querySelector('[contenteditable="true"][role="textbox"]');
+    if (ce) return ce;
+    const rb = f.querySelector('[role="textbox"]');
+    if (rb) return rb;
+  }
 
-  // 3) contenteditable textbox inside the composer form
-  const formCE = document.querySelector('form [contenteditable="true"][role="textbox"]');
-  if (formCE) return formCE;
-
-  // 4) any visible contenteditable textbox near the bottom
-  const candidates = Array.from(document.querySelectorAll('[contenteditable="true"][role="textbox"], textarea'))
+  // 3) any visible contenteditable or textarea near bottom
+  const candidates = deepQuerySelectorAll('[contenteditable="true"][role="textbox"], [role="textbox"], textarea')
     .filter(el => el.offsetParent !== null);
   if (candidates.length) return candidates[candidates.length - 1];
 
@@ -82,11 +128,9 @@ function setChatText(el, text) {
     return true;
   }
 
-  // contenteditable path
-  if (el.getAttribute("contenteditable") === "true") {
+  // contenteditable or role="textbox"
+  if (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox") {
     el.focus();
-
-    // wipe and insert plain text in a way React listens to
     while (el.firstChild) el.removeChild(el.firstChild);
     el.appendChild(document.createTextNode(text));
 
@@ -106,25 +150,25 @@ function setChatText(el, text) {
 }
 
 function clickSend() {
-  // preferred buttons
   let btn =
-    document.querySelector('[data-testid="send-button"]') ||
-    document.querySelector('form button[type="submit"]') ||
-    document.querySelector('button[aria-label*="Send"], button[aria-label*="Senden"]');
+    deepQuerySelector('[data-testid="send-button"]') ||
+    deepQuerySelector('form button[type="submit"]') ||
+    deepQuerySelector('button[aria-label*="Send"], button[aria-label*="Senden"]');
 
   if (btn) {
     btn.click();
     return true;
   }
 
-  // fallback: synthesize Enter on the composer
+  // fallback: synthesize Enter
   const el = findComposer();
   if (!el) return false;
   el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true }));
   return true;
 }
 
-// ======= main =======
+/* ======= main ======= */
+
 async function onAugment() {
   const prompt = document.getElementById("cb-input")?.value?.trim() || "";
   if (!prompt) { setStatus("Empty prompt."); return; }
@@ -156,6 +200,7 @@ async function onAugment() {
       : prompt;
 
     const box = findComposer();
+    console.log("[ContextBroker] composer:", box);
     if (!box) throw new Error("ChatGPT textbox not found.");
 
     const ok = setChatText(box, augmented);
@@ -179,3 +224,6 @@ insertBar();
 new MutationObserver(() => {
   if (!document.getElementById("cb-bar")) insertBar();
 }).observe(document.body, { childList: true, subtree: true });
+
+// helpful initial log
+console.log("[ContextBroker] content script loaded");
