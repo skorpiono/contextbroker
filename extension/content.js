@@ -1,6 +1,6 @@
 // ---------- Config ----------
 const CONFIG = {
-  API_BASE: "https://YOUR_RAILWAY_URL", // e.g. https://web-production-abc.up.railway.app
+  API_BASE: "https://web-production-851cd.up.railway.app/", // e.g. https://web-production-abc.up.railway.app
   AUGMENT_ENDPOINT: "/augment",
   selectors: {
     textarea: [
