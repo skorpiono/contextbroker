@@ -1,169 +1,127 @@
-// ---------- Config ----------
-const CONFIG = {
-  API_BASE: "https://web-production-851cd.up.railway.app/", // e.g. https://web-production-abc.up.railway.app
-  AUGMENT_ENDPOINT: "/augment",
-  selectors: {
-    textarea: [
-      '#prompt-textarea',
-      'textarea[placeholder*="message"]',
-      'textarea[placeholder*="Nachricht"]',
-      'textarea'
-    ],
-    sendButton: [
-      'button[data-testid="send-button"]',
-      'button[aria-label*="Send"]',
-      'button[aria-label*="Senden"]',
-      'form button[type="submit"]'
-    ]
-  }
-};
+// ======= config =======
+const BACKEND_URL = "https://web-production-851cd.up.railway.app/ask"; // supports GET ?q=...
+const MAX_PREVIEW_CHARS = 600;
 
-// ---------- DOM helpers ----------
-function $(sel) { return document.querySelector(sel); }
-function findFirst(selectors) {
-  for (const s of selectors) {
-    const el = document.querySelector(s);
-    if (el) return el;
-  }
-  return null;
-}
+// ======= ui =======
+function insertBar() {
+  if (document.getElementById("cb-bar")) return;
 
-// ---------- Overlay ----------
-function buildOverlay() {
-  if (document.getElementById("cb-overlay")) return;
-
-  const root = document.createElement("div");
-  root.id = "cb-overlay";
-
-  root.innerHTML = `
-    <div id="cb-header">
-      <div>
-        <span id="cb-title">ContextBroker</span>
-        <span id="cb-status"></span>
-      </div>
-      <div id="cb-actions">
-        <button id="cb-toggle" class="cb-btn secondary">Hide</button>
-        <button id="cb-augment" class="cb-btn">Augment</button>
-      </div>
-    </div>
-    <div id="cb-context">
-      <div style="font-weight:600; margin-bottom:4px;">Context preview</div>
-      <ul id="cb-list"></ul>
-    </div>
+  const wrap = document.createElement("div");
+  wrap.id = "cb-bar";
+  wrap.innerHTML = `
+    <style>
+      #cb-bar{position:fixed;z-index:99999;left:50%;transform:translateX(-50%);
+        top:72px;max-width:920px;width:calc(100% - 48px);
+        background:#0f1115;border:1px solid #2b2f36;border-radius:10px;
+        padding:8px 10px;display:flex;gap:8px;align-items:center;
+        box-shadow:0 4px 16px rgba(0,0,0,.35);font-family:system-ui,Segoe UI,Arial}
+      #cb-input{flex:1;resize:vertical;min-height:36px;max-height:160px;
+        color:#e5e7eb;background:#151922;border:1px solid #2b2f36;border-radius:8px;padding:8px}
+      #cb-run{padding:8px 12px;border:1px solid #2b2f36;background:#1e2633;
+        color:#e5e7eb;border-radius:8px;cursor:pointer}
+      #cb-status{font-size:12px;color:#93a1b1;margin-left:6px}
+      #cb-preview{white-space:pre-wrap;font-size:12px;color:#9aa4af;margin-top:4px;max-height:120px;overflow:auto}
+    </style>
+    <textarea id="cb-input" placeholder="Type your prompt here."></textarea>
+    <button id="cb-run">Augment</button>
+    <span id="cb-status"></span>
+    <div id="cb-preview"></div>
   `;
+  document.body.appendChild(wrap);
 
-  document.body.appendChild(root);
-
-  // Toggle preview
-  const toggle = $("#cb-toggle");
-  const ctx = $("#cb-context");
-  toggle.addEventListener("click", () => {
-    const isHidden = ctx.style.display !== "block";
-    ctx.style.display = isHidden ? "block" : "none";
-    toggle.textContent = isHidden ? "Hide" : "Show";
-  });
-
-  // Augment click
-  $("#cb-augment").addEventListener("click", onAugmentClick);
-
-  // Make sure we attach to the current textarea
-  attachToTextarea();
-}
-
-function setStatus(msg) {
-  const el = $("#cb-status");
-  if (el) el.textContent = msg ? `· ${msg}` : "";
-}
-
-// ---------- Core ----------
-async function getJWT() {
-  return new Promise(resolve => {
-    try {
-      chrome.storage?.local.get(["ctx_jwt"], (res) => resolve(res?.ctx_jwt || null));
-    } catch {
-      resolve(null);
-    }
+  document.getElementById("cb-run").addEventListener("click", onAugment);
+  document.getElementById("cb-input").addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") onAugment();
   });
 }
 
-async function augment(prompt) {
-  const jwt = await getJWT();
-  const res = await fetch(`${CONFIG.API_BASE}${CONFIG.AUGMENT_ENDPOINT}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(jwt ? { "Authorization": `Bearer ${jwt}` } : {})
-    },
-    body: JSON.stringify({ prompt })
-  });
+function setStatus(txt) {
+  const el = document.getElementById("cb-status");
+  if (el) el.textContent = txt || "";
+}
+function setPreview(txt) {
+  const el = document.getElementById("cb-preview");
+  if (!el) return;
+  if (!txt) { el.textContent = ""; return; }
+  const cut = txt.length > MAX_PREVIEW_CHARS ? txt.slice(0, MAX_PREVIEW_CHARS) + " ..." : txt;
+  el.textContent = "Context preview:\n" + cut;
+}
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`augment failed: ${res.status} ${txt}`);
+// ======= selectors for ChatGPT input/send =======
+function getChatBox() {
+  // New UI tends to use [data-testid="prompt-textarea"] or contenteditable textbox
+  const a = document.querySelector('[data-testid="prompt-textarea"]');
+  if (a) return a;
+  const b = [...document.querySelectorAll('[contenteditable="true"]')]
+    .find(el => el.getAttribute("role") === "textbox");
+  return b || null;
+}
+function setChatText(el, text) {
+  // Support textarea or contenteditable
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") {
+    el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
   }
-  return res.json(); // { augmentedPrompt, contextPreview, tokenUsageEstimate }
+  // contenteditable
+  el.focus();
+  document.execCommand("selectAll", false, null);
+  document.execCommand("insertText", false, text);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+function clickSend() {
+  const btn = document.querySelector('[data-testid="send-button"]') ||
+              document.querySelector('button[aria-label="Send"]');
+  if (btn) btn.click();
 }
 
-function getTextarea() {
-  return findFirst(CONFIG.selectors.textarea);
-}
-function getSendButton() {
-  return findFirst(CONFIG.selectors.sendButton);
-}
-
-async function onAugmentClick() {
-  const ta = getTextarea();
-  if (!ta) return setStatus("textarea not found");
-  const raw = (ta.value || "").trim();
-  if (!raw) return setStatus("empty prompt");
+// ======= main =======
+async function onAugment() {
+  const prompt = document.getElementById("cb-input")?.value?.trim() || "";
+  if (!prompt) { setStatus("Empty prompt."); return; }
+  setStatus("Fetching context...");
+  setPreview("");
 
   try {
-    setStatus("fetching context…");
-    const { augmentedPrompt, contextPreview = [] } = await augment(raw);
+    // GET style: /ask?q=...
+    const url = BACKEND_URL + "?q=" + encodeURIComponent(prompt);
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const txt = await res.text();
 
-    // Show context bullets
-    const list = $("#cb-list");
-    list.innerHTML = "";
-    for (const item of contextPreview) {
-      const li = document.createElement("li");
-      li.textContent = item;
-      list.appendChild(li);
+    // Our server returns plain text: answer + "---\nCONTEXT USED:\n..."
+    // Split to isolate the context block. If not found, just inject original.
+    let context = "";
+    const splitIdx = txt.indexOf("---\nCONTEXT USED:\n");
+    if (splitIdx >= 0) {
+      context = txt.slice(splitIdx + 19).trim();
+      setPreview(context);
+    } else {
+      // fallback if server returns JSON later
+      try {
+        const j = JSON.parse(txt);
+        context = j.context || "";
+        setPreview(context);
+      } catch {}
     }
-    $("#cb-context").style.display = "block";
-    $("#cb-toggle").textContent = "Hide";
 
-    // Replace textarea text
-    ta.value = augmentedPrompt;
+    const augmented = context
+      ? `CONTEXT:\n${context}\n\nQUESTION:\n${prompt}`
+      : prompt;
 
-    // Try to click send if there is a send button
-    setStatus("ready");
-    const btn = getSendButton();
-    if (btn) btn.click();
-    else ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  } catch (err) {
-    console.error("[ContextBroker] augment error", err);
-    setStatus("error");
+    const box = getChatBox();
+    if (!box) throw new Error("ChatGPT textbox not found.");
+    setChatText(box, augmented);
+    setStatus("Injected. Press Enter or I can auto send.");
+    // Auto send. Comment out if you hate power.
+    clickSend();
+    setStatus("Sent.");
+  } catch (e) {
+    setStatus("Failed: " + e.message);
   }
 }
 
-function attachToTextarea() {
-  // If ChatGPT re-renders the input, nothing breaks
-  const ta = getTextarea();
-  if (!ta) return;
-}
-
-// ---------- Boot ----------
-function init() {
-  console.log("[ContextBroker] content script loaded");
-  buildOverlay();
-
-  // Watch for SPA route changes and reattach
-  const obs = new MutationObserver(() => attachToTextarea());
-  obs.observe(document.body, { childList: true, subtree: true });
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
-} else {
-  init();
-}
+// kick it off
+insertBar();
