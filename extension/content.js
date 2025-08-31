@@ -47,34 +47,81 @@ function setPreview(txt) {
   el.textContent = "Context preview:\n" + cut;
 }
 
-// ======= selectors for ChatGPT input/send =======
-function getChatBox() {
-  // New UI tends to use [data-testid="prompt-textarea"] or contenteditable textbox
-  const a = document.querySelector('[data-testid="prompt-textarea"]');
-  if (a) return a;
-  const b = [...document.querySelectorAll('[contenteditable="true"]')]
-    .find(el => el.getAttribute("role") === "textbox");
-  return b || null;
+// ======= robust selectors for ChatGPT input/send =======
+
+function findComposer() {
+  // 1) official textarea
+  const direct = document.querySelector('[data-testid="prompt-textarea"]');
+  if (direct) return direct;
+
+  // 2) textarea inside the composer form
+  const formText = document.querySelector('form textarea');
+  if (formText) return formText;
+
+  // 3) contenteditable textbox inside the composer form
+  const formCE = document.querySelector('form [contenteditable="true"][role="textbox"]');
+  if (formCE) return formCE;
+
+  // 4) any visible contenteditable textbox near the bottom
+  const candidates = Array.from(document.querySelectorAll('[contenteditable="true"][role="textbox"], textarea'))
+    .filter(el => el.offsetParent !== null);
+  if (candidates.length) return candidates[candidates.length - 1];
+
+  return null;
 }
+
 function setChatText(el, text) {
-  // Support textarea or contenteditable
   if (!el) return false;
+
+  // textarea path
   if (el.tagName === "TEXTAREA") {
+    el.focus();
     el.value = text;
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   }
-  // contenteditable
-  el.focus();
-  document.execCommand("selectAll", false, null);
-  document.execCommand("insertText", false, text);
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  return true;
+
+  // contenteditable path
+  if (el.getAttribute("contenteditable") === "true") {
+    el.focus();
+
+    // wipe and insert plain text in a way React listens to
+    while (el.firstChild) el.removeChild(el.firstChild);
+    el.appendChild(document.createTextNode(text));
+
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  return false;
 }
+
 function clickSend() {
-  const btn = document.querySelector('[data-testid="send-button"]') ||
-              document.querySelector('button[aria-label="Send"]');
-  if (btn) btn.click();
+  // preferred buttons
+  let btn =
+    document.querySelector('[data-testid="send-button"]') ||
+    document.querySelector('form button[type="submit"]') ||
+    document.querySelector('button[aria-label*="Send"], button[aria-label*="Senden"]');
+
+  if (btn) {
+    btn.click();
+    return true;
+  }
+
+  // fallback: synthesize Enter on the composer
+  const el = findComposer();
+  if (!el) return false;
+  el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true }));
+  return true;
 }
 
 // ======= main =======
@@ -85,21 +132,18 @@ async function onAugment() {
   setPreview("");
 
   try {
-    // GET style: /ask?q=...
     const url = BACKEND_URL + "?q=" + encodeURIComponent(prompt);
     const res = await fetch(url, { method: "GET" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const txt = await res.text();
 
-    // Our server returns plain text: answer + "---\nCONTEXT USED:\n..."
-    // Split to isolate the context block. If not found, just inject original.
+    // plain text: answer + "---\nCONTEXT USED:\n..."
     let context = "";
     const splitIdx = txt.indexOf("---\nCONTEXT USED:\n");
     if (splitIdx >= 0) {
       context = txt.slice(splitIdx + 19).trim();
       setPreview(context);
     } else {
-      // fallback if server returns JSON later
       try {
         const j = JSON.parse(txt);
         context = j.context || "";
@@ -111,17 +155,27 @@ async function onAugment() {
       ? `CONTEXT:\n${context}\n\nQUESTION:\n${prompt}`
       : prompt;
 
-    const box = getChatBox();
+    const box = findComposer();
     if (!box) throw new Error("ChatGPT textbox not found.");
-    setChatText(box, augmented);
-    setStatus("Injected. Press Enter or I can auto send.");
-    // Auto send. Comment out if you hate power.
-    clickSend();
-    setStatus("Sent.");
+
+    const ok = setChatText(box, augmented);
+    if (!ok) throw new Error("Could not inject text.");
+
+    setStatus("Injected. Sending...");
+    setTimeout(() => {
+      clickSend();
+      setStatus("Sent.");
+    }, 120);
   } catch (e) {
     setStatus("Failed: " + e.message);
+    console.error("[ContextBroker]", e);
   }
 }
 
 // kick it off
 insertBar();
+
+// keep it resilient across SPA route changes
+new MutationObserver(() => {
+  if (!document.getElementById("cb-bar")) insertBar();
+}).observe(document.body, { childList: true, subtree: true });
